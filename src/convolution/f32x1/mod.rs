@@ -11,8 +11,8 @@ mod native;
 // mod neon;
 #[cfg(target_arch = "x86_64")]
 mod sse4;
-#[cfg(target_arch = "wasm32")]
-mod wasm32;
+// #[cfg(target_arch = "wasm32")]
+// mod wasm32;
 
 type P = F32;
 
@@ -21,11 +21,11 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.height() - offset >= dst_view.height());
-        let coeffs_ref = &coeffs;
+        let coeffs_ref = &*coeffs;
 
         try_process_in_threads_h! {
             horiz_convolution(
@@ -42,12 +42,12 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.width() - offset >= dst_view.width());
 
-        let coeffs_ref = &coeffs;
+        let coeffs_ref = &*coeffs;
 
         try_process_in_threads_v! {
             vert_convolution(
@@ -75,8 +75,8 @@ fn horiz_convolution(
         CpuExtensions::Sse4_1 => sse4::horiz_convolution(src_view, dst_view, offset, coeffs),
         // #[cfg(target_arch = "aarch64")]
         // CpuExtensions::Neon => neon::horiz_convolution(src_view, dst_view, offset, coeffs),
-        #[cfg(target_arch = "wasm32")]
-        CpuExtensions::Simd128 => wasm32::horiz_convolution(src_view, dst_view, offset, coeffs),
+        // #[cfg(target_arch = "wasm32")]
+        // CpuExtensions::Simd128 => wasm32::horiz_convolution(src_view, dst_view, offset, coeffs),
         _ => native::horiz_convolution(src_view, dst_view, offset, coeffs),
     }
 }

@@ -1,7 +1,7 @@
 use core::arch::x86_64::*;
 
 use super::native;
-use crate::convolution::{Coefficients, CoefficientsChunk};
+use crate::convolution::{Chunk, Coefficients};
 use crate::pixels::InnerPixel;
 use crate::{simd_utils, ImageView, ImageViewMut};
 
@@ -29,7 +29,7 @@ unsafe fn vert_convolution_into_one_row_f32<T: InnerPixel<Component = f32>>(
     src_view: &impl ImageView<Pixel = T>,
     dst_row: &mut [T],
     mut src_x: usize,
-    coeffs_chunk: CoefficientsChunk,
+    coeffs_chunk: Chunk<'_, f64>,
 ) {
     let mut c_buf = [0f64; 4];
     let mut dst_f32 = T::components_mut(dst_row);
@@ -67,7 +67,7 @@ unsafe fn vert_convolution_into_one_row_f32<T: InnerPixel<Component = f32>>(
 unsafe fn multiply_components_of_rows<T: InnerPixel<Component = f32>, const SUMS_COUNT: usize>(
     src_view: &impl ImageView<Pixel = T>,
     src_x: usize,
-    coeffs_chunk: CoefficientsChunk,
+    coeffs_chunk: Chunk<'_, f64>,
     dst_chunk: &mut [f32],
     c_buf: &mut [f64; 4],
 ) {

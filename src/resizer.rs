@@ -140,6 +140,68 @@ pub struct Resizer {
     alpha_buffer: Vec<u8>,
     convolution_buffer: Vec<u8>,
     super_sampling_buffer: Vec<u8>,
+    // photo-gallery: the last coefficients of each axis.
+    horiz_coeffs: AxisCoefficients,
+    vert_coeffs: AxisCoefficients,
+}
+
+// photo-gallery: the coefficients of an axis, and what they were computed for. A resize with
+// the same source size, crop, output size and filter on that axis as the last one (runs of
+// images of one size) reuses them, with their normalized forms; any other computes them again
+// into the same buffers. Either way a convolution allocates nothing for its coefficients once
+// the buffers have grown.
+#[derive(Default, Debug, Clone)]
+struct AxisCoefficients {
+    key: Option<CoefficientsKey>,
+    coeffs: convolution::Coefficients,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CoefficientsKey {
+    in_size: u32,
+    in0: f64,
+    in1: f64,
+    out_size: u32,
+    filter: fn(f64) -> f64,
+    filter_support: f64,
+    adaptive_kernel_size: bool,
+}
+
+impl PartialEq for CoefficientsKey {
+    fn eq(&self, other: &Self) -> bool {
+        // Floats by their bits, the filter by its address: a key unequal to an equivalent one
+        // only computes the same coefficients again.
+        self.in_size == other.in_size
+            && self.in0.to_bits() == other.in0.to_bits()
+            && self.in1.to_bits() == other.in1.to_bits()
+            && self.out_size == other.out_size
+            && core::ptr::fn_addr_eq(self.filter, other.filter)
+            && self.filter_support.to_bits() == other.filter_support.to_bits()
+            && self.adaptive_kernel_size == other.adaptive_kernel_size
+    }
+}
+
+impl AxisCoefficients {
+    /// The coefficients for `key`, unshifted.
+    fn get(&mut self, key: CoefficientsKey, log: &str) -> &mut convolution::Coefficients {
+        if self.key != Some(key) {
+            test_log!(log);
+            let _ = log; // only the tests' log reads it
+            convolution::precompute_coefficients(
+                &mut self.coeffs,
+                key.in_size,
+                key.in0,
+                key.in1,
+                key.out_size,
+                key.filter,
+                key.filter_support,
+                key.adaptive_kernel_size,
+            );
+            self.key = Some(key);
+        }
+        self.coeffs.shift = 0;
+        &mut self.coeffs
+    }
 }
 
 impl Resizer {
@@ -378,35 +440,39 @@ impl Resizer {
         let need_horizontal =
             dst_width as f64 != crop_box.width || crop_box.left != crop_box.left.round();
         let horiz_coeffs = need_horizontal.then(|| {
-            test_log!("compute horizontal convolution coefficients");
-            convolution::precompute_coefficients(
-                src_view.width(),
-                crop_box.left,
-                crop_box.left + crop_box.width,
-                dst_width,
-                filter_fn,
-                filter_support,
-                adaptive_kernel_size,
+            self.horiz_coeffs.get(
+                CoefficientsKey {
+                    in_size: src_view.width(),
+                    in0: crop_box.left,
+                    in1: crop_box.left + crop_box.width,
+                    out_size: dst_width,
+                    filter: filter_fn,
+                    filter_support,
+                    adaptive_kernel_size,
+                },
+                "compute horizontal convolution coefficients",
             )
         });
 
         let need_vertical =
             dst_height as f64 != crop_box.height || crop_box.top != crop_box.top.round();
         let vert_coeffs = need_vertical.then(|| {
-            test_log!("compute vertical convolution coefficients");
-            convolution::precompute_coefficients(
-                src_view.height(),
-                crop_box.top,
-                crop_box.top + crop_box.height,
-                dst_height,
-                filter_fn,
-                filter_support,
-                adaptive_kernel_size,
+            self.vert_coeffs.get(
+                CoefficientsKey {
+                    in_size: src_view.height(),
+                    in0: crop_box.top,
+                    in1: crop_box.top + crop_box.height,
+                    out_size: dst_height,
+                    filter: filter_fn,
+                    filter_support,
+                    adaptive_kernel_size,
+                },
+                "compute vertical convolution coefficients",
             )
         });
 
         match (horiz_coeffs, vert_coeffs) {
-            (Some(mut horiz_coeffs), Some(mut vert_coeffs)) => {
+            (Some(horiz_coeffs), Some(vert_coeffs)) => {
                 if P::components_is_u8() {
                     // For u8-based images, it is faster to do the vertical pass first
                     // instead of the horizontal.
@@ -430,10 +496,7 @@ impl Resizer {
                     );
 
                     // Shift bounds for the horizontal pass
-                    horiz_coeffs
-                        .bounds
-                        .iter_mut()
-                        .for_each(|b| b.start -= x_first);
+                    horiz_coeffs.shift = x_first;
 
                     P::horiz_convolution(
                         &temp_image,
@@ -462,10 +525,7 @@ impl Resizer {
                     );
 
                     // Shift bounds for the vertical pass
-                    vert_coeffs
-                        .bounds
-                        .iter_mut()
-                        .for_each(|b| b.start -= y_first);
+                    vert_coeffs.shift = y_first;
                     P::vert_convolution(&temp_image, dst_view, 0, vert_coeffs, self.cpu_extensions);
                 }
             }
@@ -642,4 +702,95 @@ fn iter_cropped_rows<'a, S: ImageView>(
     let first_col = crop_box.left.max(0.) as usize;
     let last_col = first_col + crop_box.width.max(0.) as usize;
     rows.map(move |row| unsafe { row.get_unchecked(first_col..last_col) })
+}
+
+// photo-gallery: a resizer reused across sizes, crops, pixel types and filters (its kept
+// coefficients hit, missed, and read by both pass orders) resizes as a new one does.
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+    use crate::images::Image;
+
+    #[test]
+    fn a_reused_resizer_resizes_as_a_new_one() {
+        let cases: [(
+            PixelType,
+            (u32, u32),
+            (u32, u32),
+            Option<(f64, f64, f64, f64)>,
+            FilterType,
+        ); 8] = [
+            (
+                PixelType::U8x3,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Lanczos3,
+            ),
+            (
+                PixelType::U8x3,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Lanczos3,
+            ),
+            (
+                PixelType::U16x2,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Lanczos3,
+            ),
+            (
+                PixelType::F32,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Lanczos3,
+            ),
+            (
+                PixelType::U8x3,
+                (61, 47),
+                (20, 13),
+                Some((3.5, 2.25, 40.0, 30.5)),
+                FilterType::Lanczos3,
+            ),
+            (
+                PixelType::U8x4,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Bilinear,
+            ),
+            (
+                PixelType::U8,
+                (61, 47),
+                (61, 13),
+                None,
+                FilterType::Mitchell,
+            ),
+            (
+                PixelType::U8x3,
+                (61, 47),
+                (20, 13),
+                None,
+                FilterType::Lanczos3,
+            ),
+        ];
+        let mut reused = Resizer::new();
+        for (i, (pixel_type, (sw, sh), (dw, dh), crop, filter)) in cases.into_iter().enumerate() {
+            let size = sw as usize * sh as usize * pixel_type.size();
+            let pixels: Vec<u8> = (0..size).map(|j| (j * 31 + j / 7 + i) as u8).collect();
+            let src = Image::from_vec_u8(sw, sh, pixels, pixel_type).unwrap();
+            let mut options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(filter));
+            if let Some((l, t, w, h)) = crop {
+                options = options.crop(l, t, w, h);
+            }
+            let mut want = Image::new(dw, dh, pixel_type);
+            Resizer::new().resize(&src, &mut want, &options).unwrap();
+            let mut got = Image::new(dw, dh, pixel_type);
+            reused.resize(&src, &mut got, &options).unwrap();
+            assert_eq!(got.buffer(), want.buffer(), "case {i}");
+        }
+    }
 }

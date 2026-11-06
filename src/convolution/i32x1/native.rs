@@ -36,7 +36,7 @@ pub(crate) fn vert_convolution(
     let coefficients_chunks = coeffs.get_chunks();
     let dst_rows = dst_view.iter_rows_mut(0);
     let start_src_x = offset as usize;
-    for (&coeffs_chunk, dst_row) in coefficients_chunks.iter().zip(dst_rows) {
+    for (coeffs_chunk, dst_row) in coefficients_chunks.iter().zip(dst_rows) {
         let first_y_src = coeffs_chunk.start;
         let mut src_x = start_src_x;
         for dst_pixel in dst_row.iter_mut() {

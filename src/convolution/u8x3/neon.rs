@@ -1,6 +1,7 @@
 use core::arch::aarch64::*;
 
-use crate::convolution::optimisations::{CoefficientsI16Chunk, Normalizer16};
+use crate::convolution::optimisations::Normalizer16;
+use crate::convolution::Chunks;
 use crate::pixels::U8x3;
 use crate::{neon_utils, ImageView, ImageViewMut};
 
@@ -34,7 +35,7 @@ fn horiz_convolution_p<const PRECISION: i32>(
     let dst_iter = dst_view.iter_4_rows_mut();
     for (src_rows, dst_rows) in src_iter.zip(dst_iter) {
         unsafe {
-            horiz_convolution_four_rows::<PRECISION>(src_rows, dst_rows, &coefficients_chunks);
+            horiz_convolution_four_rows::<PRECISION>(src_rows, dst_rows, coefficients_chunks);
         }
     }
 
@@ -43,7 +44,7 @@ fn horiz_convolution_p<const PRECISION: i32>(
     let dst_rows = dst_view.iter_rows_mut(yy);
     for (src_row, dst_row) in src_rows.zip(dst_rows) {
         unsafe {
-            horiz_convolution_one_row::<PRECISION>(src_row, dst_row, &coefficients_chunks);
+            horiz_convolution_one_row::<PRECISION>(src_row, dst_row, coefficients_chunks);
         }
     }
 }
@@ -58,7 +59,7 @@ fn horiz_convolution_p<const PRECISION: i32>(
 unsafe fn horiz_convolution_four_rows<const PRECISION: i32>(
     src_rows: [&[U8x3]; 4],
     dst_rows: [&mut [U8x3]; 4],
-    coefficients_chunks: &[CoefficientsI16Chunk],
+    coefficients_chunks: Chunks<'_, i16>,
 ) {
     let initial = vdupq_n_s32(1 << (PRECISION - 1));
     let zero_u8x8 = vdup_n_u8(0);
@@ -127,7 +128,7 @@ unsafe fn horiz_convolution_four_rows<const PRECISION: i32>(
 unsafe fn horiz_convolution_one_row<const PRECISION: i32>(
     src_row: &[U8x3],
     dst_row: &mut [U8x3],
-    coefficients_chunks: &[CoefficientsI16Chunk],
+    coefficients_chunks: Chunks<'_, i16>,
 ) {
     let initial = vdupq_n_s32(1 << (PRECISION - 1));
     let zero_u8x8 = vdup_n_u8(0);

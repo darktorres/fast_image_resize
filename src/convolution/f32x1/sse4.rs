@@ -1,6 +1,6 @@
 use core::arch::x86_64::*;
 
-use crate::convolution::{Coefficients, CoefficientsChunk};
+use crate::convolution::{Chunks, Coefficients};
 use crate::pixels::F32;
 use crate::{simd_utils, ImageView, ImageViewMut};
 
@@ -18,7 +18,7 @@ pub(crate) fn horiz_convolution(
     let dst_iter = dst_view.iter_4_rows_mut();
     for (src_rows, dst_rows) in src_iter.zip(dst_iter) {
         unsafe {
-            horiz_convolution_rows(src_rows, dst_rows, &coefficients_chunks);
+            horiz_convolution_rows(src_rows, dst_rows, coefficients_chunks);
         }
     }
 
@@ -27,7 +27,7 @@ pub(crate) fn horiz_convolution(
     let dst_rows = dst_view.iter_rows_mut(yy);
     for (src_row, dst_row) in src_rows.zip(dst_rows) {
         unsafe {
-            horiz_convolution_rows([src_row], [dst_row], &coefficients_chunks);
+            horiz_convolution_rows([src_row], [dst_row], coefficients_chunks);
         }
     }
 }
@@ -42,7 +42,7 @@ pub(crate) fn horiz_convolution(
 unsafe fn horiz_convolution_rows<const ROWS_COUNT: usize>(
     src_rows: [&[F32]; ROWS_COUNT],
     dst_rows: [&mut [F32]; ROWS_COUNT],
-    coefficients_chunks: &[CoefficientsChunk],
+    coefficients_chunks: Chunks<'_, f64>,
 ) {
     let mut ll_buf = [0f64; 2];
 

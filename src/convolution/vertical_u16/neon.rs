@@ -42,7 +42,7 @@ unsafe fn vert_convolution_into_one_row_i64<T: InnerPixel<Component = u16>>(
     src_view: &impl ImageView<Pixel = T>,
     dst_buf: &mut [i64],
     start_src_x: usize,
-    coeffs_chunk: &CoefficientsI32Chunk,
+    coeffs_chunk: CoefficientsI32Chunk,
 ) {
     let width = dst_buf.len();
     let y_start = coeffs_chunk.start;

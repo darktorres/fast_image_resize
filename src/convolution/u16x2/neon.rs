@@ -1,6 +1,7 @@
 use core::arch::aarch64::*;
 
-use crate::convolution::optimisations::{CoefficientsI32Chunk, Normalizer32};
+use crate::convolution::optimisations::Normalizer32;
+use crate::convolution::Chunks;
 use crate::pixels::U16x2;
 use crate::{neon_utils, ImageView, ImageViewMut};
 
@@ -58,7 +59,7 @@ fn horiz_convolution_p<const PRECISION: i32>(
 unsafe fn horiz_convolution_four_rows<const PRECISION: i32>(
     src_rows: [&[U16x2]; 4],
     dst_rows: [&mut [U16x2]; 4],
-    coefficients_chunks: &[CoefficientsI32Chunk],
+    coefficients_chunks: Chunks<'_, i32>,
 ) {
     let initial = vdupq_n_s64(1i64 << (PRECISION - 1));
     // let zero_u16x8 = vdupq_n_u16(0);
@@ -125,7 +126,7 @@ unsafe fn horiz_convolution_four_rows<const PRECISION: i32>(
 unsafe fn horiz_convolution_one_row<const PRECISION: i32>(
     src_row: &[U16x2],
     dst_row: &mut [U16x2],
-    coefficients_chunks: &[CoefficientsI32Chunk],
+    coefficients_chunks: Chunks<'_, i32>,
 ) {
     let initial = vdupq_n_s64(1i64 << (PRECISION - 1));
     let zero_u16x8 = vdupq_n_u16(0);

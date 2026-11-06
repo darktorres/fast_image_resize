@@ -29,7 +29,7 @@ unsafe fn vert_convolution_into_one_row_u8<T: InnerPixel<Component = u8>>(
     src_view: &impl ImageView<Pixel = T>,
     dst_row: &mut [T],
     mut src_x: usize,
-    coeffs_chunk: &CoefficientsI16Chunk,
+    coeffs_chunk: CoefficientsI16Chunk,
     normalizer: &Normalizer16,
 ) {
     const ZERO: v128 = i64x2(0, 0);
