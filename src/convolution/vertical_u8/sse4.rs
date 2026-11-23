@@ -56,7 +56,7 @@ unsafe fn vert_convolution_into_one_row<T, const PRECISION: i32>(
     src_view: &impl ImageView<Pixel = T>,
     dst_row: &mut [T],
     mut src_x: usize,
-    coeffs_chunk: &CoefficientsI16Chunk,
+    coeffs_chunk: CoefficientsI16Chunk,
     normalizer: &Normalizer16,
 ) where
     T: InnerPixel<Component = u8>,
@@ -121,7 +121,7 @@ pub(crate) unsafe fn conv_less_that_32_components<T, const PRECISION: i32>(
     src_view: &impl ImageView<Pixel = T>,
     mut dst_u8: &mut [u8],
     mut src_x: usize,
-    coeffs_chunk: &CoefficientsI16Chunk,
+    coeffs_chunk: CoefficientsI16Chunk,
     normalizer: &Normalizer16,
 ) where
     T: InnerPixel<Component = u8>,

@@ -38,7 +38,7 @@ fn scale_row<T>(
     dst_row: &mut [T],
     initial: i32,
     src_x_initial: usize,
-    coeffs_chunk: &CoefficientsI16Chunk,
+    coeffs_chunk: CoefficientsI16Chunk,
     normalizer: &Normalizer16,
 ) where
     T: InnerPixel<Component = u8>,

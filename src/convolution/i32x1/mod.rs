@@ -11,11 +11,11 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         _cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.height() - offset >= dst_view.height());
-        let coeffs_ref = &coeffs;
+        let coeffs_ref: &Coefficients = coeffs;
 
         try_process_in_threads_h! {
             horiz_convolution(
@@ -31,12 +31,12 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         _cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.width() - offset >= dst_view.width());
 
-        let coeffs_ref = &coeffs;
+        let coeffs_ref: &Coefficients = coeffs;
 
         try_process_in_threads_v! {
             vert_convolution(

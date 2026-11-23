@@ -32,11 +32,13 @@ cfg_if::cfg_if! {
 }
 
 pub(crate) trait Convolution: InnerPixel {
+    // photo-gallery: the coefficients are borrowed mutably, so that the resizer keeps them
+    // (and their normalized forms, made when first asked for) for the next call.
     fn horiz_convolution(
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     );
 
@@ -44,7 +46,7 @@ pub(crate) trait Convolution: InnerPixel {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     );
 }
@@ -55,35 +57,138 @@ pub(crate) struct Bound {
     pub size: u32,
 }
 
+// photo-gallery: the coefficients of one axis, kept from call to call. `values` holds
+// `window_size` weights per output pixel, of which its bound's first `size` are used. The
+// normalized forms (`i16`, `i32`) are kept beside them in the same layout, made when first
+// asked for. The chunks of every form are views over these buffers, so a convolution
+// allocates nothing for its coefficients.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Coefficients {
     pub values: Vec<f64>,
     pub window_size: usize,
     pub bounds: Vec<Bound>,
+    /// Subtracted from each bound's start by the chunks: the second pass of a two-pass
+    /// convolution reads a temporary image that starts at the first bound.
+    pub shift: u32,
+    // The first and the end of the bounds, unshifted (the resizer sizes its temporary image
+    // by them, as the bounds of a crop may start well past the first pixel).
     min_bound_start: u32,
     max_bound_end: u32,
+    pub(crate) i16: Normalized<i16>,
+    pub(crate) i32: Normalized<i32>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CoefficientsChunk<'a> {
-    pub start: u32,
-    pub values: &'a [f64],
+/// A normalized form of the coefficients, in their layout. `current`: made from the values.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Normalized<T> {
+    pub precision: u8,
+    pub values: Vec<T>,
+    pub current: bool,
 }
+
+/// One output pixel's weights, and the first input pixel they apply to.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Chunk<'a, T> {
+    pub start: u32,
+    pub values: &'a [T],
+}
+
+impl<'a, T> Chunk<'a, T> {
+    #[inline(always)]
+    pub fn values(&self) -> &'a [T] {
+        self.values
+    }
+}
+
+/// The chunks of a form of the coefficients, one per output pixel.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Chunks<'a, T> {
+    values: &'a [T],
+    window_size: usize,
+    bounds: &'a [Bound],
+    shift: u32,
+}
+
+impl<'a, T> Chunks<'a, T> {
+    pub(crate) fn new(values: &'a [T], coeffs: &'a Coefficients) -> Self {
+        debug_assert_eq!(values.len(), coeffs.window_size * coeffs.bounds.len());
+        Self {
+            values,
+            window_size: coeffs.window_size,
+            bounds: &coeffs.bounds,
+            shift: coeffs.shift,
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.bounds.len()
+    }
+
+    #[inline(always)]
+    pub fn iter(&self) -> ChunksIter<'a, T> {
+        ChunksIter {
+            values: self.values,
+            window_size: self.window_size,
+            bounds: self.bounds.iter(),
+            shift: self.shift,
+        }
+    }
+}
+
+impl<'a, T> IntoIterator for Chunks<'a, T> {
+    type Item = Chunk<'a, T>;
+    type IntoIter = ChunksIter<'a, T>;
+
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &Chunks<'a, T> {
+    type Item = Chunk<'a, T>;
+    type IntoIter = ChunksIter<'a, T>;
+
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChunksIter<'a, T> {
+    values: &'a [T],
+    window_size: usize,
+    bounds: core::slice::Iter<'a, Bound>,
+    shift: u32,
+}
+
+impl<'a, T> Iterator for ChunksIter<'a, T> {
+    type Item = Chunk<'a, T>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let bound = self.bounds.next()?;
+        let (window, rest) = self.values.split_at(self.window_size);
+        self.values = rest;
+        Some(Chunk {
+            start: bound.start - self.shift,
+            values: &window[..bound.size as usize],
+        })
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.bounds.size_hint()
+    }
+}
+
+impl<T> ExactSizeIterator for ChunksIter<'_, T> {}
 
 impl Coefficients {
-    pub fn get_chunks(&self) -> Vec<CoefficientsChunk<'_>> {
-        let mut coeffs = self.values.as_slice();
-        let mut res = Vec::with_capacity(self.bounds.len());
-        for bound in &self.bounds {
-            let (left, right) = coeffs.split_at(self.window_size);
-            coeffs = right;
-            let size = bound.size as usize;
-            res.push(CoefficientsChunk {
-                start: bound.start,
-                values: &left[0..size],
-            });
-        }
-        res
+    pub fn get_chunks(&self) -> Chunks<'_, f64> {
+        Chunks::new(&self.values, self)
     }
 
     pub fn min_bound_start(&self) -> u32 {
@@ -95,7 +200,11 @@ impl Coefficients {
     }
 }
 
+// photo-gallery: computed into `out`, whose buffers are reused. Its normalized forms are
+// marked for making again, and its shift is cleared.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn precompute_coefficients(
+    out: &mut Coefficients,
     in_size: u32,
     in0: f64, // Left/top border for cropping
     in1: f64, // Right/bottom border for cropping
@@ -103,13 +212,21 @@ pub(crate) fn precompute_coefficients(
     filter: fn(f64) -> f64,
     filter_support: f64,
     adaptive_kernel_size: bool,
-) -> Coefficients {
+) {
+    out.values.clear();
+    out.bounds.clear();
+    out.window_size = 0;
+    out.shift = 0;
+    out.min_bound_start = 0;
+    out.max_bound_end = 0;
+    out.i16.current = false;
+    out.i32.current = false;
     if in_size == 0 || out_size == 0 {
-        return Coefficients::default();
+        return;
     }
     let scale = (in1 - in0) / out_size as f64;
     if scale <= 0. {
-        return Coefficients::default();
+        return;
     }
     let filter_scale = if adaptive_kernel_size {
         scale.max(1.0)
@@ -126,10 +243,13 @@ pub(crate) fn precompute_coefficients(
     let recip_filter_scale = 1.0 / filter_scale;
 
     let count_of_coeffs = window_size * out_size as usize;
-    let mut coeffs: Vec<f64> = Vec::with_capacity(count_of_coeffs);
-    let mut bounds: Vec<Bound> = Vec::with_capacity(out_size as usize);
-    let mut min_bound_start = u32::MAX;
-    let mut max_bound_end = 0;
+    let Coefficients {
+        values: coeffs,
+        bounds,
+        ..
+    } = &mut *out;
+    coeffs.reserve(count_of_coeffs);
+    bounds.reserve(out_size as usize);
 
     for out_x in 0..out_size {
         // Find the point in the input image corresponding to the center
@@ -183,21 +303,18 @@ pub(crate) fn precompute_coefficients(
             start: bound_start,
             size: bound_end - bound_start,
         });
-        min_bound_start = min_bound_start.min(bound_start);
-        max_bound_end = max_bound_end.max(bound_end);
     }
+    out.window_size = window_size;
 
-    if bounds.is_empty() {
-        min_bound_start = 0;
-    }
-
-    Coefficients {
-        values: coeffs,
-        window_size,
-        bounds,
-        min_bound_start,
-        max_bound_end,
-    }
+    // The bounds' first start and last end, as upstream keeps them (the resizer's second
+    // pass is sized by them; with no bounds both are zero).
+    out.min_bound_start = out.bounds.iter().map(|b| b.start).min().unwrap_or(0);
+    out.max_bound_end = out
+        .bounds
+        .iter()
+        .map(|b| b.start + b.size)
+        .max()
+        .unwrap_or(0);
 }
 
 #[cfg(test)]
@@ -215,7 +332,9 @@ mod tests {
             height: 8.0,
         };
         let (filter_fn, filter_support) = get_filter_func(FilterType::CatmullRom);
-        let coeffs = precompute_coefficients(
+        let mut coeffs = Coefficients::default();
+        precompute_coefficients(
+            &mut coeffs,
             100,
             crop_box.left,
             crop_box.left + crop_box.width,

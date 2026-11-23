@@ -42,7 +42,7 @@ unsafe fn vert_convolution_into_one_row_i32<T>(
     src_view: &impl ImageView<Pixel = T>,
     dst_buf: &mut [i32],
     start_src_x: usize,
-    coeffs_chunk: &CoefficientsI16Chunk,
+    coeffs_chunk: CoefficientsI16Chunk,
 ) where
     T: InnerPixel<Component = u8>,
 {

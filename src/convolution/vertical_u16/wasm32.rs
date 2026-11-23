@@ -27,7 +27,7 @@ unsafe fn vert_convolution_into_one_row_u16<T: InnerPixel<Component = u16>>(
     src_view: &impl ImageView<Pixel = T>,
     dst_row: &mut [T],
     mut src_x: usize,
-    coeffs_chunk: &CoefficientsI32Chunk,
+    coeffs_chunk: CoefficientsI32Chunk,
     normalizer: &Normalizer32,
 ) {
     let y_start = coeffs_chunk.start;

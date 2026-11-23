@@ -21,7 +21,7 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.height() - offset >= dst_view.height());
@@ -44,7 +44,7 @@ impl Convolution for P {
         src_view: &impl ImageView<Pixel = Self>,
         dst_view: &mut impl ImageViewMut<Pixel = Self>,
         offset: u32,
-        coeffs: Coefficients,
+        coeffs: &mut Coefficients,
         cpu_extensions: CpuExtensions,
     ) {
         debug_assert!(src_view.width() - offset >= dst_view.width());
